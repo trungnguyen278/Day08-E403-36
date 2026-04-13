@@ -1,0 +1,282 @@
+{
+  "788876f4e0f745a176505dc91fe7269e6a32b18338940fd26d430bef279a05ba": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin từ tài liệu được cung cấp."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi về SLA xử lý ticket P1."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "Câu trả lời bao gồm cả thời gian phản hồi ban đầu và thời gian xử lý/khắc phục."
+    }
+  },
+  "71d560f47de53a22753e973e51d6aa942eb9402055046c893e38f9f935b9491e": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời trích xuất chính xác thông tin về thời hạn yêu cầu hoàn tiền từ ngữ cảnh."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi của người dùng về thời hạn yêu cầu hoàn tiền."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "Câu trả lời bao gồm đầy đủ thông tin về thời hạn yêu cầu hoàn tiền theo ngữ cảnh."
+    }
+  },
+  "8c33250827142f585e53e6b8382ded1392be90d1ef82bdecad39d8494ffad67e": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin được cung cấp trong tài liệu [1]."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp và chính xác giải đáp câu hỏi về người phê duyệt quyền Level 3."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "Câu trả lời bao gồm đầy đủ tất cả các bên cần phê duyệt cho quyền Level 3 theo tài liệu."
+    }
+  },
+  "c0af5651fbdb9521591074745f36ac64dacaaffa96018f89ea1d8a0ed5609177": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin trong tài liệu được cung cấp."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời giải quyết trực tiếp câu hỏi về việc hoàn tiền cho sản phẩm kỹ thuật số."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "Câu trả lời nêu rõ sản phẩm kỹ thuật số không được hoàn tiền theo chính sách."
+    }
+  },
+  "e5c8ec7f6149ae5183f742cbcbae8c65346a4ab9d18e447a45f59cc3f2cb5312": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin từ tài liệu được cung cấp."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi về số lần đăng nhập sai."
+    },
+    "completeness": {
+      "score": 4,
+      "notes": "Câu trả lời cung cấp số lần đăng nhập sai và cách mở khóa."
+    }
+  },
+  "22a3d574ed67daec2872317572e17359e29405ca4ba8581e14db54e74cd70331": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời bám sát hoàn toàn thông tin từ các tài liệu được cung cấp."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời giải thích chi tiết quy trình escalation cho sự cố P1 theo đúng câu hỏi."
+    },
+    "completeness": {
+      "score": 4,
+      "notes": "Câu trả lời bao gồm các bước xử lý sự cố P1 và quy trình escalation, nhưng thiếu chi tiết về việc cấp quyền tạm thời."
+    }
+  },
+  "47c9ba4da9ecc252809fcbb555a9697dbec69fca804ba54836a927b2fcb4419e": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin được cung cấp trong tài liệu [1]."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi về tên tài liệu Approval Matrix."
+    },
+    "completeness": {
+      "score": 3,
+      "notes": "Câu trả lời chỉ nêu tên cũ, chưa cập nhật tên mới theo tài liệu."
+    }
+  },
+  "d51344498c11e95444a3a54e24e5a86676435b7dae7951d6f9619169b44850ab": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin từ tài liệu được cung cấp."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi về số ngày làm remote tối đa mỗi tuần."
+    },
+    "completeness": {
+      "score": 4,
+      "notes": "Câu trả lời nêu rõ số ngày remote tối đa và điều kiện sau thử việc, nhưng thiếu thông tin về phê duyệt của Team Lead."
+    }
+  },
+  "e01b0ad428f97f903dd0aa4e2b57572fa972bad25d5cef80573f56cb58098b1f": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "The answer correctly states that the information is not available in the provided documents."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "The answer directly addresses the question by stating the lack of information."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "The answer is complete as it accurately reflects the absence of information in the context."
+    }
+  },
+  "87a914fd6ae3213ea155f380f90e4d241ec60831b3f8c34388ed27fcb48f0e22": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "The answer correctly states that the provided documents do not mention special procedures for VIP customers."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "The answer directly addresses the question about whether the refund process differs for VIP customers."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "The answer accurately reflects the lack of specific information for VIP customers in the provided context."
+    }
+  },
+  "8f2a57b8593e2e67401c081a2eed9e6226a55c368123a5309889afad942cd2d7": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin được cung cấp trong tài liệu."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi về SLA xử lý ticket P1."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "Câu trả lời bao gồm cả thời gian phản hồi ban đầu và thời gian xử lý/khắc phục."
+    }
+  },
+  "98f1c89fde8bc02b424c7d3a06372404b83617c69c29ca39fc61021ae31a2977": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin từ ngữ cảnh được cung cấp."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi về thời hạn yêu cầu hoàn tiền."
+    },
+    "completeness": {
+      "score": 4,
+      "notes": "Câu trả lời cung cấp thời hạn chính xác, nhưng thiếu các điều kiện khác đi kèm."
+    }
+  },
+  "621cf6f04919ad6fc13a5aa6f29d48e11a9e70628b0fb4fd00b9b136dd4c442e": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin trong tài liệu được cung cấp."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải quyết câu hỏi về người phê duyệt cho Level 3."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "Câu trả lời bao gồm tất cả những người phê duyệt cần thiết cho Level 3 theo tài liệu."
+    }
+  },
+  "39ab81956eeb5843dd9558897d3654e4217887b811e83668d412839ddb2d7f8e": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin trong tài liệu được cung cấp."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời giải quyết trực tiếp câu hỏi về việc hoàn tiền cho sản phẩm kỹ thuật số."
+    },
+    "completeness": {
+      "score": 4,
+      "notes": "Câu trả lời nêu rõ sản phẩm kỹ thuật số không được hoàn tiền, nhưng bỏ qua chi tiết về ngoại lệ 'lỗi do nhà sản xuất'."
+    }
+  },
+  "55ccfadc032e37d6239d9a0892b0496a6686cbcaeee1cbb839b30584e73ca27d": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin được cung cấp trong tài liệu."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi về số lần đăng nhập sai."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "Câu trả lời cung cấp đầy đủ thông tin về số lần đăng nhập sai dẫn đến khóa tài khoản."
+    }
+  },
+  "a606ec138f3eeab988eef767223fce1b3d2c3aa715c8b8d825fbd4fb50cd46ef": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin được cung cấp trong tài liệu."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời giải thích quy trình escalation cho sự cố P1 như được hỏi."
+    },
+    "completeness": {
+      "score": 3,
+      "notes": "Câu trả lời mô tả quy trình cấp quyền tạm thời, nhưng không đề cập đến việc tự động escalate lên Senior Engineer sau 10 phút."
+    }
+  },
+  "dd175ff4fc9dffd4cdf53a63a066856fb5de9668782e192d434842003c2e0cad": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin được cung cấp trong tài liệu [1]."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi về tên của tài liệu Approval Matrix."
+    },
+    "completeness": {
+      "score": 3,
+      "notes": "Câu trả lời chỉ nêu tên cũ, chưa đề cập đến tên mới của tài liệu."
+    }
+  },
+  "9208a1f1df159f0035cb266726c46a0d626970d3d1b3d03f15e939b1ad27fb64": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "Câu trả lời hoàn toàn dựa trên thông tin từ tài liệu được cung cấp."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "Câu trả lời trực tiếp giải đáp câu hỏi về số ngày remote tối đa mỗi tuần."
+    },
+    "completeness": {
+      "score": 4,
+      "notes": "Câu trả lời nêu rõ số ngày remote tối đa và điều kiện sau probation, nhưng thiếu thông tin về phê duyệt của Team Lead."
+    }
+  },
+  "64ef0eabe74fdd668817d54c350f3b82583445936e53a5da268e72455aeb73da": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "The answer correctly states that the information is not available in the provided documents."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "The answer directly addresses the question by stating the lack of information."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "The answer is complete as it accurately reflects the absence of information in the context."
+    }
+  },
+  "51afe834b79e956db43f4925c244e8a862dd22fe6fa9af43cfbf9c7276c48bce": {
+    "faithfulness": {
+      "score": 5,
+      "notes": "The answer correctly states that the provided documents do not mention a special process for VIP customers."
+    },
+    "relevance": {
+      "score": 5,
+      "notes": "The answer directly addresses the question about whether the refund process differs for VIP customers."
+    },
+    "completeness": {
+      "score": 5,
+      "notes": "The answer accurately reflects the lack of specific information for VIP customers in the provided context."
+    }
+  }
+}

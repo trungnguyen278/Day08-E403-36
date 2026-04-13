@@ -1,325 +1,475 @@
 """
-rag_answer.py — Sprint 2 + Sprint 3: Retrieval & Grounded Answer
-================================================================
-Sprint 2 (60 phút): Baseline RAG
-  - Dense retrieval từ ChromaDB
-  - Grounded answer function với prompt ép citation
-  - Trả lời được ít nhất 3 câu hỏi mẫu, output có source
-
-Sprint 3 (60 phút): Tuning tối thiểu
-  - Thêm hybrid retrieval (dense + sparse/BM25)
-  - Hoặc thêm rerank (cross-encoder)
-  - Hoặc thử query transformation (expansion, decomposition, HyDE)
-  - Tạo bảng so sánh baseline vs variant
-
-Definition of Done Sprint 2:
-  ✓ rag_answer("SLA ticket P1?") trả về câu trả lời có citation
-  ✓ rag_answer("Câu hỏi không có trong docs") trả về "Không đủ dữ liệu"
-
-Definition of Done Sprint 3:
-  ✓ Có ít nhất 1 variant (hybrid / rerank / query transform) chạy được
-  ✓ Giải thích được tại sao chọn biến đó để tune
+rag_answer.py - Sprint 2/3: Dense retrieval + hybrid tuning + grounded generation
 """
 
+import json
+import math
 import os
-from typing import List, Dict, Any, Optional, Tuple
+import re
+import time
+import unicodedata
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any, Dict, List, Optional
+
 from dotenv import load_dotenv
+
+from index import CHROMA_DB_DIR, COLLECTION_NAME, get_embedding
 
 load_dotenv()
 
-# =============================================================================
-# CẤU HÌNH
-# =============================================================================
 
-TOP_K_SEARCH = 10    # Số chunk lấy từ vector store trước rerank (search rộng)
-TOP_K_SELECT = 3     # Số chunk gửi vào prompt sau rerank/select (top-3 sweet spot)
+TOP_K_SEARCH = 10
+TOP_K_SELECT = 3
+MIN_RELEVANCE_SCORE = float(os.getenv("MIN_RELEVANCE_SCORE", "0.35"))
+HYBRID_DENSE_WEIGHT = float(os.getenv("HYBRID_DENSE_WEIGHT", "0.6"))
+HYBRID_SPARSE_WEIGHT = float(os.getenv("HYBRID_SPARSE_WEIGHT", "0.4"))
 
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash-lite").strip()
+
+_OPENAI_CLIENT = None
+_SPARSE_INDEX_CACHE: Optional[Dict[str, Any]] = None
+
+_QUERY_ALIASES = {
+    "approval matrix": ["access control sop", "system access"],
+    "level 3": ["elevated access"],
+    "p1": ["critical", "incident"],
+    "refund": ["hoan tien"],
+    "remote": ["lam remote", "work from home"],
+}
 
 
-# =============================================================================
-# RETRIEVAL — DENSE (Vector Search)
-# =============================================================================
+def _get_openai_client():
+    global _OPENAI_CLIENT
+
+    if _OPENAI_CLIENT is None:
+        from openai import OpenAI
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("Thiếu OPENAI_API_KEY trong .env để gọi LLM.")
+        _OPENAI_CLIENT = OpenAI(api_key=api_key)
+    return _OPENAI_CLIENT
+
+
+def _resolve_llm_model(provider: str) -> str:
+    if provider == "gemini":
+        configured = os.getenv("LLM_MODEL", "").strip()
+        if configured and not configured.startswith("gpt-"):
+            return configured
+        return GEMINI_MODEL or "gemini-2.5-flash-lite"
+
+    configured = os.getenv("LLM_MODEL", "").strip()
+    return configured or "gpt-4o-mini"
+
+
+def _call_gemini(
+    prompt: str,
+    model_name: Optional[str] = None,
+    temperature: float = 0.0,
+    max_tokens: int = 512,
+    response_mime_type: Optional[str] = None,
+    retries: int = 4,
+) -> str:
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        raise RuntimeError("Thiếu GOOGLE_API_KEY trong .env để gọi Gemini.")
+
+    resolved_model = (model_name or GEMINI_MODEL or "gemini-2.5-flash-lite").strip()
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{urllib.parse.quote(resolved_model)}:generateContent?key={urllib.parse.quote(api_key)}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_tokens,
+        },
+    }
+    if response_mime_type:
+        payload["generationConfig"]["responseMimeType"] = response_mime_type
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    body = None
+    last_error = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                body = json.loads(response.read().decode("utf-8"))
+            break
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            last_error = RuntimeError(f"Gọi Gemini thất bại ({exc.code}): {detail}")
+            if exc.code not in {429, 500, 503} or attempt == retries - 1:
+                raise last_error from exc
+            time.sleep(2 ** attempt)
+        except urllib.error.URLError as exc:
+            last_error = RuntimeError(f"Gọi Gemini thất bại do lỗi mạng: {exc}")
+            if attempt == retries - 1:
+                raise last_error from exc
+            time.sleep(2 ** attempt)
+
+    if body is None:
+        raise last_error or RuntimeError("Gemini không trả về phản hồi hợp lệ.")
+
+    candidates = body.get("candidates", [])
+    if not candidates:
+        raise RuntimeError(f"Gemini không trả về candidate hợp lệ: {body}")
+
+    parts = candidates[0].get("content", {}).get("parts", [])
+    text_parts = [part.get("text", "") for part in parts if part.get("text")]
+    text = "".join(text_parts).strip()
+    if not text:
+        raise RuntimeError(f"Gemini không trả về text hợp lệ: {body}")
+    return text
+
+
+def _strip_accents(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text)
+    return "".join(char for char in normalized if not unicodedata.combining(char))
+
+
+def _normalize_for_search(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).lower()
+    normalized = normalized.replace("đ", "d")
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _tokenize_for_search(text: str) -> List[str]:
+    normalized = _normalize_for_search(text)
+    stripped = _strip_accents(normalized)
+
+    tokens: List[str] = []
+    for variant in {normalized, stripped}:
+        tokens.extend(re.findall(r"\w+", variant, flags=re.UNICODE))
+
+    return [token for token in tokens if token]
+
+
+def _get_collection():
+    import chromadb
+
+    client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
+    return client.get_collection(COLLECTION_NAME)
+
+
+def _get_sparse_index() -> Dict[str, Any]:
+    global _SPARSE_INDEX_CACHE
+
+    collection = _get_collection()
+    collection_count = collection.count()
+    if _SPARSE_INDEX_CACHE and _SPARSE_INDEX_CACHE.get("count") == collection_count:
+        return _SPARSE_INDEX_CACHE
+
+    from rank_bm25 import BM25Okapi
+
+    results = collection.get(include=["documents", "metadatas", "embeddings"])
+    ids = results.get("ids", [])
+    documents = results.get("documents", [])
+    metadatas = results.get("metadatas", [])
+    embeddings = results.get("embeddings", [])
+
+    records: List[Dict[str, Any]] = []
+    tokenized_documents: List[List[str]] = []
+
+    for idx, (doc_id, document, metadata, embedding) in enumerate(zip(ids, documents, metadatas, embeddings)):
+        metadata = metadata or {}
+        searchable_text = "\n".join(
+            [
+                document or "",
+                metadata.get("source", ""),
+                metadata.get("section", ""),
+                metadata.get("department", ""),
+            ]
+        )
+        records.append(
+            {
+                "id": doc_id or f"chunk_{idx}",
+                "text": document or "",
+                "metadata": metadata,
+                "embedding": embedding,
+            }
+        )
+        tokenized_documents.append(_tokenize_for_search(searchable_text))
+
+    _SPARSE_INDEX_CACHE = {
+        "count": collection_count,
+        "records": records,
+        "bm25": BM25Okapi(tokenized_documents or [["empty"]]),
+    }
+    return _SPARSE_INDEX_CACHE
+
+
+def _cosine_similarity(left: List[float], right: List[float]) -> float:
+    if left is None or right is None:
+        return 0.0
+
+    if len(left) == 0 or len(right) == 0 or len(left) != len(right):
+        return 0.0
+
+    dot_product = sum(float(l) * float(r) for l, r in zip(left, right))
+    left_norm = math.sqrt(sum(float(value) * float(value) for value in left))
+    right_norm = math.sqrt(sum(float(value) * float(value) for value in right))
+
+    if left_norm == 0.0 or right_norm == 0.0:
+        return 0.0
+
+    return dot_product / (left_norm * right_norm)
+
+
+def _normalize_sparse_scores(scores: List[float]) -> List[float]:
+    positive_scores = [score for score in scores if score > 0]
+    if not positive_scores:
+        return [0.0 for _ in scores]
+
+    max_score = max(positive_scores)
+    return [max(0.0, float(score)) / max_score for score in scores]
+
 
 def retrieve_dense(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any]]:
     """
-    Dense retrieval: tìm kiếm theo embedding similarity trong ChromaDB.
-
-    Args:
-        query: Câu hỏi của người dùng
-        top_k: Số chunk tối đa trả về
-
-    Returns:
-        List các dict, mỗi dict là một chunk với:
-          - "text": nội dung chunk
-          - "metadata": metadata (source, section, effective_date, ...)
-          - "score": cosine similarity score
-
-    TODO Sprint 2:
-    1. Embed query bằng cùng model đã dùng khi index (xem index.py)
-    2. Query ChromaDB với embedding đó
-    3. Trả về kết quả kèm score
-
-    Gợi ý:
-        import chromadb
-        from index import get_embedding, CHROMA_DB_DIR
-
-        client = chromadb.PersistentClient(path=str(CHROMA_DB_DIR))
-        collection = client.get_collection("rag_lab")
-
-        query_embedding = get_embedding(query)
-        results = collection.query(
-            query_embeddings=[query_embedding],
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"]
-        )
-        # Lưu ý: distances trong ChromaDB cosine = 1 - similarity
-        # Score = 1 - distance
+    Dense retrieval từ ChromaDB bằng cùng embedding model đã dùng khi index.
     """
-    raise NotImplementedError(
-        "TODO Sprint 2: Implement retrieve_dense().\n"
-        "Tham khảo comment trong hàm để biết cách query ChromaDB."
+    if not query.strip():
+        return []
+
+    collection = _get_collection()
+    query_embedding = get_embedding(query)
+    results = collection.query(
+        query_embeddings=[query_embedding],
+        n_results=top_k,
+        include=["documents", "metadatas", "distances"],
     )
 
+    documents = results.get("documents", [[]])[0]
+    metadatas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
 
-# =============================================================================
-# RETRIEVAL — SPARSE / BM25 (Keyword Search)
-# Dùng cho Sprint 3 Variant hoặc kết hợp Hybrid
-# =============================================================================
+    retrieved: List[Dict[str, Any]] = []
+    for document, metadata, distance in zip(documents, metadatas, distances):
+        score = max(0.0, 1.0 - float(distance))
+        retrieved.append(
+            {
+                "text": document,
+                "metadata": metadata or {},
+                "score": score,
+                "dense_score": score,
+                "sparse_score": 0.0,
+            }
+        )
+
+    return retrieved
+
 
 def retrieve_sparse(query: str, top_k: int = TOP_K_SEARCH) -> List[Dict[str, Any]]:
     """
-    Sparse retrieval: tìm kiếm theo keyword (BM25).
-
-    Mạnh ở: exact term, mã lỗi, tên riêng (ví dụ: "ERR-403", "P1", "refund")
-    Hay hụt: câu hỏi paraphrase, đồng nghĩa
-
-    TODO Sprint 3 (nếu chọn hybrid):
-    1. Cài rank_bm25: pip install rank-bm25
-    2. Load tất cả chunks từ ChromaDB (hoặc rebuild từ docs)
-    3. Tokenize và tạo BM25Index
-    4. Query và trả về top_k kết quả
-
-    Gợi ý:
-        from rank_bm25 import BM25Okapi
-        corpus = [chunk["text"] for chunk in all_chunks]
-        tokenized_corpus = [doc.lower().split() for doc in corpus]
-        bm25 = BM25Okapi(tokenized_corpus)
-        tokenized_query = query.lower().split()
-        scores = bm25.get_scores(tokenized_query)
-        top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
+    Sparse retrieval bằng BM25 trên toàn bộ chunks đã index.
     """
-    # TODO Sprint 3: Implement BM25 search
-    # Tạm thời return empty list
-    print("[retrieve_sparse] Chưa implement — Sprint 3")
-    return []
+    if not query.strip():
+        return []
 
+    index_data = _get_sparse_index()
+    query_tokens = _tokenize_for_search(query)
+    if not query_tokens:
+        return []
 
-# =============================================================================
-# RETRIEVAL — HYBRID (Dense + Sparse với Reciprocal Rank Fusion)
-# =============================================================================
+    bm25_scores = index_data["bm25"].get_scores(query_tokens)
+    sparse_scores = _normalize_sparse_scores(list(bm25_scores))
+
+    ranked_items = sorted(
+        zip(index_data["records"], sparse_scores, bm25_scores),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+    retrieved: List[Dict[str, Any]] = []
+    for record, normalized_score, raw_score in ranked_items[:top_k]:
+        if normalized_score <= 0:
+            continue
+        retrieved.append(
+            {
+                "text": record["text"],
+                "metadata": record["metadata"],
+                "score": float(normalized_score),
+                "dense_score": 0.0,
+                "sparse_score": float(normalized_score),
+                "sparse_score_raw": float(raw_score),
+            }
+        )
+
+    return retrieved
+
 
 def retrieve_hybrid(
     query: str,
     top_k: int = TOP_K_SEARCH,
-    dense_weight: float = 0.6,
-    sparse_weight: float = 0.4,
+    dense_weight: float = HYBRID_DENSE_WEIGHT,
+    sparse_weight: float = HYBRID_SPARSE_WEIGHT,
 ) -> List[Dict[str, Any]]:
     """
-    Hybrid retrieval: kết hợp dense và sparse bằng Reciprocal Rank Fusion (RRF).
-
-    Mạnh ở: giữ được cả nghĩa (dense) lẫn keyword chính xác (sparse)
-    Phù hợp khi: corpus lẫn lộn ngôn ngữ tự nhiên và tên riêng/mã lỗi/điều khoản
-
-    Args:
-        dense_weight: Trọng số cho dense score (0-1)
-        sparse_weight: Trọng số cho sparse score (0-1)
-
-    TODO Sprint 3 (nếu chọn hybrid):
-    1. Chạy retrieve_dense() → dense_results
-    2. Chạy retrieve_sparse() → sparse_results
-    3. Merge bằng RRF:
-       RRF_score(doc) = dense_weight * (1 / (60 + dense_rank)) +
-                        sparse_weight * (1 / (60 + sparse_rank))
-       60 là hằng số RRF tiêu chuẩn
-    4. Sort theo RRF score giảm dần, trả về top_k
-
-    Khi nào dùng hybrid (từ slide):
-    - Corpus có cả câu tự nhiên VÀ tên riêng, mã lỗi, điều khoản
-    - Query như "Approval Matrix" khi doc đổi tên thành "Access Control SOP"
+    Hybrid retrieval: dense cosine similarity + sparse BM25 score.
     """
-    # TODO Sprint 3: Implement hybrid RRF
-    # Tạm thời fallback về dense
-    print("[retrieve_hybrid] Chưa implement RRF — fallback về dense")
-    return retrieve_dense(query, top_k)
+    if not query.strip():
+        return []
+
+    index_data = _get_sparse_index()
+    query_tokens = _tokenize_for_search(query)
+    if not query_tokens:
+        return []
+
+    query_embedding = get_embedding(query)
+    bm25_scores = list(index_data["bm25"].get_scores(query_tokens))
+    sparse_scores = _normalize_sparse_scores(bm25_scores)
+
+    ranked_items = []
+    for record, sparse_score, raw_sparse_score in zip(index_data["records"], sparse_scores, bm25_scores):
+        dense_score = max(0.0, _cosine_similarity(query_embedding, record["embedding"]))
+        combined_score = (dense_weight * dense_score) + (sparse_weight * sparse_score)
+        ranked_items.append(
+            {
+                "text": record["text"],
+                "metadata": record["metadata"],
+                "score": combined_score,
+                "dense_score": dense_score,
+                "sparse_score": float(sparse_score),
+                "sparse_score_raw": float(raw_sparse_score),
+            }
+        )
+
+    ranked_items.sort(key=lambda item: item["score"], reverse=True)
+    return ranked_items[:top_k]
 
 
-# =============================================================================
-# RERANK (Sprint 3 alternative)
-# Cross-encoder để chấm lại relevance sau search rộng
-# =============================================================================
-
-def rerank(
-    query: str,
-    candidates: List[Dict[str, Any]],
-    top_k: int = TOP_K_SELECT,
-) -> List[Dict[str, Any]]:
+def rerank(query: str, candidates: List[Dict[str, Any]], top_k: int = TOP_K_SELECT) -> List[Dict[str, Any]]:
     """
-    Rerank các candidate chunks bằng cross-encoder.
-
-    Cross-encoder: chấm lại "chunk nào thực sự trả lời câu hỏi này?"
-    MMR (Maximal Marginal Relevance): giữ relevance nhưng giảm trùng lặp
-
-    Funnel logic (từ slide):
-      Search rộng (top-20) → Rerank (top-6) → Select (top-3)
-
-    TODO Sprint 3 (nếu chọn rerank):
-    Option A — Cross-encoder:
-        from sentence_transformers import CrossEncoder
-        model = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-        pairs = [[query, chunk["text"]] for chunk in candidates]
-        scores = model.predict(pairs)
-        ranked = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
-        return [chunk for chunk, _ in ranked[:top_k]]
-
-    Option B — Rerank bằng LLM (đơn giản hơn nhưng tốn token):
-        Gửi list chunks cho LLM, yêu cầu chọn top_k relevant nhất
-
-    Khi nào dùng rerank:
-    - Dense/hybrid trả về nhiều chunk nhưng có noise
-    - Muốn chắc chắn chỉ 3-5 chunk tốt nhất vào prompt
+    Lexical rerank nhẹ để ưu tiên candidates có overlap token cao hơn với query.
     """
-    # TODO Sprint 3: Implement rerank
-    # Tạm thời trả về top_k đầu tiên (không rerank)
-    return candidates[:top_k]
+    query_tokens = set(_tokenize_for_search(query))
+    if not query_tokens:
+        return candidates[:top_k]
 
+    reranked = []
+    for candidate in candidates:
+        candidate_tokens = set(
+            _tokenize_for_search(
+                " ".join(
+                    [
+                        candidate.get("text", ""),
+                        candidate.get("metadata", {}).get("source", ""),
+                        candidate.get("metadata", {}).get("section", ""),
+                    ]
+                )
+            )
+        )
+        overlap = len(query_tokens & candidate_tokens) / max(len(query_tokens), 1)
+        rerank_score = (0.7 * candidate.get("score", 0.0)) + (0.3 * overlap)
+        reranked.append({**candidate, "rerank_score": rerank_score})
 
-# =============================================================================
-# QUERY TRANSFORMATION (Sprint 3 alternative)
-# =============================================================================
+    reranked.sort(key=lambda item: item.get("rerank_score", item.get("score", 0.0)), reverse=True)
+    return reranked[:top_k]
+
 
 def transform_query(query: str, strategy: str = "expansion") -> List[str]:
     """
-    Biến đổi query để tăng recall.
-
-    Strategies:
-      - "expansion": Thêm từ đồng nghĩa, alias, tên cũ
-      - "decomposition": Tách query phức tạp thành 2-3 sub-queries
-      - "hyde": Sinh câu trả lời giả (hypothetical document) để embed thay query
-
-    TODO Sprint 3 (nếu chọn query transformation):
-    Gọi LLM với prompt phù hợp với từng strategy.
-
-    Ví dụ expansion prompt:
-        "Given the query: '{query}'
-         Generate 2-3 alternative phrasings or related terms in Vietnamese.
-         Output as JSON array of strings."
-
-    Ví dụ decomposition:
-        "Break down this complex query into 2-3 simpler sub-queries: '{query}'
-         Output as JSON array."
-
-    Khi nào dùng:
-    - Expansion: query dùng alias/tên cũ (ví dụ: "Approval Matrix" → "Access Control SOP")
-    - Decomposition: query hỏi nhiều thứ một lúc
-    - HyDE: query mơ hồ, search theo nghĩa không hiệu quả
+    Query transform đơn giản cho alias cũ / từ khóa đồng nghĩa.
     """
-    # TODO Sprint 3: Implement query transformation
-    # Tạm thời trả về query gốc
-    return [query]
+    normalized_query = _normalize_for_search(query)
+    expanded_queries = [query.strip()]
 
+    if strategy != "expansion":
+        return expanded_queries
 
-# =============================================================================
-# GENERATION — GROUNDED ANSWER FUNCTION
-# =============================================================================
+    for trigger, aliases in _QUERY_ALIASES.items():
+        if trigger in normalized_query:
+            for alias in aliases:
+                expanded_queries.append(f"{query.strip()} {alias}".strip())
+
+    unique_queries: List[str] = []
+    for item in expanded_queries:
+        if item and item not in unique_queries:
+            unique_queries.append(item)
+
+    return unique_queries
+
 
 def build_context_block(chunks: List[Dict[str, Any]]) -> str:
-    """
-    Đóng gói danh sách chunks thành context block để đưa vào prompt.
+    context_parts: List[str] = []
+    for index, chunk in enumerate(chunks, start=1):
+        metadata = chunk.get("metadata", {})
+        source = metadata.get("source", "unknown")
+        section = metadata.get("section", "")
+        effective_date = metadata.get("effective_date", "")
+        score = chunk.get("score", 0.0)
+        dense_score = chunk.get("dense_score")
+        sparse_score = chunk.get("sparse_score")
 
-    Format: structured snippets với source, section, score (từ slide).
-    Mỗi chunk có số thứ tự [1], [2], ... để model dễ trích dẫn.
-    """
-    context_parts = []
-    for i, chunk in enumerate(chunks, 1):
-        meta = chunk.get("metadata", {})
-        source = meta.get("source", "unknown")
-        section = meta.get("section", "")
-        score = chunk.get("score", 0)
-        text = chunk.get("text", "")
-
-        # TODO: Tùy chỉnh format nếu muốn (thêm effective_date, department, ...)
-        header = f"[{i}] {source}"
+        header_parts = [f"[{index}] {source}"]
         if section:
-            header += f" | {section}"
-        if score > 0:
-            header += f" | score={score:.2f}"
+            header_parts.append(section)
+        if effective_date:
+            header_parts.append(f"effective_date={effective_date}")
+        header_parts.append(f"score={score:.2f}")
+        if dense_score is not None:
+            header_parts.append(f"dense={dense_score:.2f}")
+        if sparse_score is not None:
+            header_parts.append(f"sparse={sparse_score:.2f}")
 
-        context_parts.append(f"{header}\n{text}")
+        context_parts.append(" | ".join(header_parts) + "\n" + chunk.get("text", ""))
 
     return "\n\n".join(context_parts)
 
 
 def build_grounded_prompt(query: str, context_block: str) -> str:
-    """
-    Xây dựng grounded prompt theo 4 quy tắc từ slide:
-    1. Evidence-only: Chỉ trả lời từ retrieved context
-    2. Abstain: Thiếu context thì nói không đủ dữ liệu
-    3. Citation: Gắn source/section khi có thể
-    4. Short, clear, stable: Output ngắn, rõ, nhất quán
+    return f"""You are answering questions using only the retrieved internal documents.
+Rules:
+- Answer only from the provided context.
+- If the context is insufficient, reply exactly "Không đủ dữ liệu trong tài liệu được cung cấp.".
+- Cite evidence with snippet numbers such as [1] or [2].
+- Keep the answer short, factual, and in the same language as the question.
+- Do not mention any information that is not present in the context.
 
-    TODO Sprint 2:
-    Đây là prompt baseline. Trong Sprint 3, bạn có thể:
-    - Thêm hướng dẫn về format output (JSON, bullet points)
-    - Thêm ngôn ngữ phản hồi (tiếng Việt vs tiếng Anh)
-    - Điều chỉnh tone phù hợp với use case (CS helpdesk, IT support)
-    """
-    prompt = f"""Answer only from the retrieved context below.
-If the context is insufficient to answer the question, say you do not know and do not make up information.
-Cite the source field (in brackets like [1]) when possible.
-Keep your answer short, clear, and factual.
-Respond in the same language as the question.
-
-Question: {query}
+Question:
+{query}
 
 Context:
 {context_block}
 
 Answer:"""
-    return prompt
 
 
 def call_llm(prompt: str) -> str:
     """
-    Gọi LLM để sinh câu trả lời.
+    Gọi LLM theo provider cấu hình trong `.env`.
+    """
+    resolved_model = _resolve_llm_model(LLM_PROVIDER)
 
-    TODO Sprint 2:
-    Chọn một trong hai:
-
-    Option A — OpenAI (cần OPENAI_API_KEY):
-        from openai import OpenAI
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    if LLM_PROVIDER == "openai":
+        client = _get_openai_client()
         response = client.chat.completions.create(
-            model=LLM_MODEL,
+            model=resolved_model,
             messages=[{"role": "user", "content": prompt}],
-            temperature=0,     # temperature=0 để output ổn định, dễ đánh giá
+            temperature=0,
             max_tokens=512,
         )
-        return response.choices[0].message.content
+        return (response.choices[0].message.content or "").strip()
 
-    Option B — Google Gemini (cần GOOGLE_API_KEY):
-        import google.generativeai as genai
-        genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-        model = genai.GenerativeModel("gemini-1.5-flash")
-        response = model.generate_content(prompt)
-        return response.text
+    if LLM_PROVIDER == "gemini":
+        return _call_gemini(prompt, model_name=resolved_model, temperature=0.0, max_tokens=512)
 
-    Lưu ý: Dùng temperature=0 hoặc thấp để output ổn định cho evaluation.
-    """
-    raise NotImplementedError(
-        "TODO Sprint 2: Implement call_llm().\n"
-        "Chọn Option A (OpenAI) hoặc Option B (Gemini) trong TODO comment."
-    )
+    raise ValueError(f"LLM_PROVIDER hiện tại chưa được hỗ trợ trong code này: {LLM_PROVIDER}")
+
+
+def _abstain_answer() -> str:
+    return "Không đủ dữ liệu trong tài liệu được cung cấp."
 
 
 def rag_answer(
@@ -331,45 +481,18 @@ def rag_answer(
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """
-    Pipeline RAG hoàn chỉnh: query → retrieve → (rerank) → generate.
-
-    Args:
-        query: Câu hỏi
-        retrieval_mode: "dense" | "sparse" | "hybrid"
-        top_k_search: Số chunk lấy từ vector store (search rộng)
-        top_k_select: Số chunk đưa vào prompt (sau rerank/select)
-        use_rerank: Có dùng cross-encoder rerank không
-        verbose: In thêm thông tin debug
-
-    Returns:
-        Dict với:
-          - "answer": câu trả lời grounded
-          - "sources": list source names trích dẫn
-          - "chunks_used": list chunks đã dùng
-          - "query": query gốc
-          - "config": cấu hình pipeline đã dùng
-
-    TODO Sprint 2 — Implement pipeline cơ bản:
-    1. Chọn retrieval function dựa theo retrieval_mode
-    2. Gọi rerank() nếu use_rerank=True
-    3. Truncate về top_k_select chunks
-    4. Build context block và grounded prompt
-    5. Gọi call_llm() để sinh câu trả lời
-    6. Trả về kết quả kèm metadata
-
-    TODO Sprint 3 — Thử các variant:
-    - Variant A: đổi retrieval_mode="hybrid"
-    - Variant B: bật use_rerank=True
-    - Variant C: thêm query transformation trước khi retrieve
+    Pipeline RAG baseline: retrieve -> select -> grounded prompt -> generate.
     """
     config = {
         "retrieval_mode": retrieval_mode,
         "top_k_search": top_k_search,
         "top_k_select": top_k_select,
         "use_rerank": use_rerank,
+        "llm_provider": LLM_PROVIDER,
+        "llm_model": _resolve_llm_model(LLM_PROVIDER),
+        "min_relevance_score": MIN_RELEVANCE_SCORE,
     }
 
-    # --- Bước 1: Retrieve ---
     if retrieval_mode == "dense":
         candidates = retrieve_dense(query, top_k=top_k_search)
     elif retrieval_mode == "sparse":
@@ -381,118 +504,106 @@ def rag_answer(
 
     if verbose:
         print(f"\n[RAG] Query: {query}")
-        print(f"[RAG] Retrieved {len(candidates)} candidates (mode={retrieval_mode})")
-        for i, c in enumerate(candidates[:3]):
-            print(f"  [{i+1}] score={c.get('score', 0):.3f} | {c['metadata'].get('source', '?')}")
+        print(f"[RAG] Retrieved {len(candidates)} candidates")
+        for index, candidate in enumerate(candidates[:5], start=1):
+            print(
+                f"  [{index}] score={candidate.get('score', 0):.3f} | "
+                f"dense={candidate.get('dense_score', 0):.3f} | "
+                f"sparse={candidate.get('sparse_score', 0):.3f} | "
+                f"{candidate.get('metadata', {}).get('source', '?')} | "
+                f"{candidate.get('metadata', {}).get('section', '?')}"
+            )
 
-    # --- Bước 2: Rerank (optional) ---
+    filtered_candidates = [candidate for candidate in candidates if candidate.get("score", 0.0) >= MIN_RELEVANCE_SCORE]
+
     if use_rerank:
-        candidates = rerank(query, candidates, top_k=top_k_select)
+        selected_chunks = rerank(query, filtered_candidates, top_k=top_k_select)
     else:
-        candidates = candidates[:top_k_select]
+        selected_chunks = filtered_candidates[:top_k_select]
 
     if verbose:
-        print(f"[RAG] After select: {len(candidates)} chunks")
+        print(f"[RAG] Candidates above threshold {MIN_RELEVANCE_SCORE:.2f}: {len(filtered_candidates)}")
+        print(f"[RAG] Selected chunks: {len(selected_chunks)}")
 
-    # --- Bước 3: Build context và prompt ---
-    context_block = build_context_block(candidates)
+    if not selected_chunks:
+        return {
+            "query": query,
+            "answer": _abstain_answer(),
+            "sources": [],
+            "chunks_used": [],
+            "config": config,
+        }
+
+    context_block = build_context_block(selected_chunks)
     prompt = build_grounded_prompt(query, context_block)
 
     if verbose:
-        print(f"\n[RAG] Prompt:\n{prompt[:500]}...\n")
+        print(f"\n[RAG] Context block:\n{context_block[:1200]}\n")
 
-    # --- Bước 4: Generate ---
     answer = call_llm(prompt)
 
-    # --- Bước 5: Extract sources ---
-    sources = list({
-        c["metadata"].get("source", "unknown")
-        for c in candidates
-    })
+    cited_indices = [int(match) for match in re.findall(r"\[(\d+)\]", answer)]
+    if cited_indices:
+        sources = list(
+            dict.fromkeys(
+                selected_chunks[index - 1]["metadata"].get("source", "unknown")
+                for index in cited_indices
+                if 1 <= index <= len(selected_chunks)
+            )
+        )
+    else:
+        sources = list(dict.fromkeys(chunk["metadata"].get("source", "unknown") for chunk in selected_chunks))
 
     return {
         "query": query,
         "answer": answer,
         "sources": sources,
-        "chunks_used": candidates,
+        "chunks_used": selected_chunks,
         "config": config,
     }
 
 
-# =============================================================================
-# SPRINT 3: SO SÁNH BASELINE VS VARIANT
-# =============================================================================
-
 def compare_retrieval_strategies(query: str) -> None:
-    """
-    So sánh các retrieval strategies với cùng một query.
-
-    TODO Sprint 3:
-    Chạy hàm này để thấy sự khác biệt giữa dense, sparse, hybrid.
-    Dùng để justify tại sao chọn variant đó cho Sprint 3.
-
-    A/B Rule (từ slide): Chỉ đổi MỘT biến mỗi lần.
-    """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Query: {query}")
-    print('='*60)
+    print("=" * 60)
 
-    strategies = ["dense", "hybrid"]  # Thêm "sparse" sau khi implement
-
-    for strategy in strategies:
+    for strategy in ["dense", "hybrid"]:
         print(f"\n--- Strategy: {strategy} ---")
         try:
             result = rag_answer(query, retrieval_mode=strategy, verbose=False)
             print(f"Answer: {result['answer']}")
             print(f"Sources: {result['sources']}")
-        except NotImplementedError as e:
-            print(f"Chưa implement: {e}")
-        except Exception as e:
-            print(f"Lỗi: {e}")
+            for index, chunk in enumerate(result["chunks_used"], start=1):
+                metadata = chunk.get("metadata", {})
+                print(
+                    f"  [{index}] score={chunk.get('score', 0):.3f} "
+                    f"dense={chunk.get('dense_score', 0):.3f} "
+                    f"sparse={chunk.get('sparse_score', 0):.3f} "
+                    f"{metadata.get('source', '?')} | {metadata.get('section', '?')}"
+                )
+        except Exception as exc:
+            print(f"Lỗi: {exc}")
 
-
-# =============================================================================
-# MAIN — Demo và Test
-# =============================================================================
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Sprint 2 + 3: RAG Answer Pipeline")
+    print("Sprint 2/3: RAG Answer Pipeline")
     print("=" * 60)
 
-    # Test queries từ data/test_questions.json
     test_queries = [
         "SLA xử lý ticket P1 là bao lâu?",
         "Khách hàng có thể yêu cầu hoàn tiền trong bao nhiêu ngày?",
         "Ai phải phê duyệt để cấp quyền Level 3?",
-        "ERR-403-AUTH là lỗi gì?",  # Query không có trong docs → kiểm tra abstain
+        "Approval Matrix để cấp quyền hệ thống là tài liệu nào?",
+        "ERR-403-AUTH là lỗi gì?",
     ]
 
-    print("\n--- Sprint 2: Test Baseline (Dense) ---")
     for query in test_queries:
         print(f"\nQuery: {query}")
         try:
-            result = rag_answer(query, retrieval_mode="dense", verbose=True)
+            result = rag_answer(query, retrieval_mode="hybrid", verbose=True)
             print(f"Answer: {result['answer']}")
             print(f"Sources: {result['sources']}")
-        except NotImplementedError:
-            print("Chưa implement — hoàn thành TODO trong retrieve_dense() và call_llm() trước.")
-        except Exception as e:
-            print(f"Lỗi: {e}")
-
-    # Uncomment sau khi Sprint 3 hoàn thành:
-    # print("\n--- Sprint 3: So sánh strategies ---")
-    # compare_retrieval_strategies("Approval Matrix để cấp quyền là tài liệu nào?")
-    # compare_retrieval_strategies("ERR-403-AUTH")
-
-    print("\n\nViệc cần làm Sprint 2:")
-    print("  1. Implement retrieve_dense() — query ChromaDB")
-    print("  2. Implement call_llm() — gọi OpenAI hoặc Gemini")
-    print("  3. Chạy rag_answer() với 3+ test queries")
-    print("  4. Verify: output có citation không? Câu không có docs → abstain không?")
-
-    print("\nViệc cần làm Sprint 3:")
-    print("  1. Chọn 1 trong 3 variants: hybrid, rerank, hoặc query transformation")
-    print("  2. Implement variant đó")
-    print("  3. Chạy compare_retrieval_strategies() để thấy sự khác biệt")
-    print("  4. Ghi lý do chọn biến đó vào docs/tuning-log.md")
+        except Exception as exc:
+            print(f"Lỗi: {exc}")

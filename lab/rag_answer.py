@@ -11,6 +11,10 @@ import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
+from argparse import ArgumentParser
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
@@ -19,6 +23,9 @@ from index import CHROMA_DB_DIR, COLLECTION_NAME, get_embedding
 
 load_dotenv()
 
+
+BASE_DIR = Path(__file__).parent
+UI_DIR = BASE_DIR / "ui"
 
 TOP_K_SEARCH = 10
 TOP_K_SELECT = 3
@@ -586,7 +593,167 @@ def compare_retrieval_strategies(query: str) -> None:
             print(f"Lỗi: {exc}")
 
 
-if __name__ == "__main__":
+def _read_ui_file(filename: str) -> bytes:
+    filepath = UI_DIR / filename
+    if not filepath.exists():
+        raise FileNotFoundError(f"Không tìm thấy file UI: {filepath}")
+    return filepath.read_bytes()
+
+
+def _extract_payload_value(data: Dict[str, Any], key: str, default: Any) -> Any:
+    value = data.get(key, default)
+    return default if value in (None, "") else value
+
+
+def _serialize_chunk(chunk: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = chunk.get("metadata", {})
+    return {
+        "text": chunk.get("text", ""),
+        "score": round(float(chunk.get("score", 0.0)), 4),
+        "dense_score": round(float(chunk.get("dense_score", 0.0)), 4),
+        "sparse_score": round(float(chunk.get("sparse_score", 0.0)), 4),
+        "rerank_score": round(float(chunk.get("rerank_score", 0.0)), 4)
+        if chunk.get("rerank_score") is not None
+        else None,
+        "metadata": {
+            "source": metadata.get("source", "unknown"),
+            "section": metadata.get("section", ""),
+            "department": metadata.get("department", ""),
+            "effective_date": metadata.get("effective_date", ""),
+            "access": metadata.get("access", ""),
+        },
+    }
+
+
+def _parse_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _parse_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def _json_result(result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "query": result.get("query", ""),
+        "answer": result.get("answer", ""),
+        "sources": result.get("sources", []),
+        "chunks_used": [_serialize_chunk(chunk) for chunk in result.get("chunks_used", [])],
+        "config": result.get("config", {}),
+    }
+
+
+class RagUIHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        path = self.path.split("?", 1)[0]
+
+        if path == "/api/health":
+            self._send_json(
+                HTTPStatus.OK,
+                {
+                    "status": "ok",
+                    "llm_provider": LLM_PROVIDER,
+                    "llm_model": _resolve_llm_model(LLM_PROVIDER),
+                    "embedding_provider": os.getenv("EMBEDDING_PROVIDER", "openai"),
+                },
+            )
+            return
+
+        if path != "/":
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Không tìm thấy tài nguyên."})
+            return
+
+        try:
+            content = _read_ui_file("index.html")
+        except FileNotFoundError as exc:
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            return
+
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path != "/api/ask":
+            self._send_json(HTTPStatus.NOT_FOUND, {"error": "Endpoint không tồn tại."})
+            return
+
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            content_length = 0
+
+        raw_body = self.rfile.read(content_length) if content_length > 0 else b"{}"
+
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except json.JSONDecodeError:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Body phải là JSON hợp lệ."})
+            return
+
+        query = str(_extract_payload_value(payload, "query", "")).strip()
+        if not query:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": "Vui lòng nhập câu hỏi."})
+            return
+
+        retrieval_mode = str(_extract_payload_value(payload, "retrieval_mode", "hybrid")).strip().lower()
+        use_rerank = _parse_bool(payload.get("use_rerank", False))
+        top_k_search = _parse_positive_int(_extract_payload_value(payload, "top_k_search", TOP_K_SEARCH), TOP_K_SEARCH)
+        top_k_select = _parse_positive_int(_extract_payload_value(payload, "top_k_select", TOP_K_SELECT), TOP_K_SELECT)
+
+        try:
+            result = rag_answer(
+                query=query,
+                retrieval_mode=retrieval_mode,
+                top_k_search=top_k_search,
+                top_k_select=top_k_select,
+                use_rerank=use_rerank,
+                verbose=False,
+            )
+        except ValueError as exc:
+            self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+            return
+        except Exception as exc:
+            self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(exc)})
+            return
+
+        self._send_json(HTTPStatus.OK, _json_result(result))
+
+    def log_message(self, format: str, *args: Any) -> None:
+        print(f"[RAG UI] {self.address_string()} - {format % args}")
+
+    def _send_json(self, status: HTTPStatus, payload: Dict[str, Any]) -> None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def run_server(host: str = "127.0.0.1", port: int = 8000) -> None:
+    server = ThreadingHTTPServer((host, port), RagUIHandler)
+    print(f"RAG UI đang chạy tại http://{host}:{port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nĐã dừng RAG UI.")
+    finally:
+        server.server_close()
+
+
+def run_demo_queries() -> None:
     print("=" * 60)
     print("Sprint 2/3: RAG Answer Pipeline")
     print("=" * 60)
@@ -607,3 +774,37 @@ if __name__ == "__main__":
             print(f"Sources: {result['sources']}")
         except Exception as exc:
             print(f"Lỗi: {exc}")
+
+
+def build_cli_parser() -> ArgumentParser:
+    parser = ArgumentParser(description="RAG answer pipeline with optional web UI.")
+    parser.add_argument("--serve", action="store_true", help="Chạy web UI tại local server.")
+    parser.add_argument("--host", default="127.0.0.1", help="Host cho web UI.")
+    parser.add_argument("--port", type=int, default=8000, help="Port cho web UI.")
+    parser.add_argument("--query", help="Chạy một truy vấn đơn lẻ từ command line.")
+    parser.add_argument(
+        "--mode",
+        default="hybrid",
+        choices=["dense", "sparse", "hybrid"],
+        help="Retrieval mode khi chạy CLI query.",
+    )
+    parser.add_argument("--rerank", action="store_true", help="Bật rerank cho CLI query.")
+    parser.add_argument("--verbose", action="store_true", help="In thêm log khi chạy CLI query.")
+    return parser
+
+
+if __name__ == "__main__":
+    args = build_cli_parser().parse_args()
+
+    if args.serve:
+        run_server(host=args.host, port=args.port)
+    elif args.query:
+        result = rag_answer(
+            query=args.query,
+            retrieval_mode=args.mode,
+            use_rerank=args.rerank,
+            verbose=args.verbose,
+        )
+        print(json.dumps(_json_result(result), ensure_ascii=False, indent=2))
+    else:
+        run_demo_queries()

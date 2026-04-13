@@ -1,201 +1,192 @@
-# Lab Day 08 — Full RAG Pipeline
+# Lab Day 08 — RAG Pipeline
 
-**Môn:** AI in Action (AICB-P1)  
-**Chủ đề:** RAG Pipeline: Indexing → Retrieval → Generation → Evaluation  
-**Thời gian:** 4 giờ (4 sprints x 60 phút)
+Repo này là bài lab RAG cho nhóm CS + IT Helpdesk. Hệ thống hiện tại đã có đủ các phần chính:
+- build index từ tài liệu nội bộ
+- truy vấn RAG bằng CLI
+- giao diện web local để hỏi đáp
+- evaluation và scorecard kết quả
 
----
+## Thành phần chính
 
-## Bối cảnh
+| File | Vai trò |
+|---|---|
+| `index.py` | Tiền xử lý tài liệu, chunking, embedding, upsert vào ChromaDB |
+| `rag_answer.py` | Retrieve, rerank tùy chọn, sinh câu trả lời, chạy CLI và web server |
+| `eval.py` | Chạy scorecard và lưu kết quả evaluation |
+| `ui/index.html` | Giao diện web một file duy nhất, gồm HTML + CSS + JavaScript |
+| `.env.example` | Mẫu cấu hình provider, model và API key |
 
-Nhóm xây dựng **trợ lý nội bộ cho khối CS + IT Helpdesk**: trả lời câu hỏi về chính sách, SLA ticket, quy trình cấp quyền, và FAQ bằng chứng cứ được retrieve có kiểm soát.
+## Dữ liệu và đầu ra
 
-**Câu hỏi mẫu hệ thống phải trả lời được:**
-- "SLA xử lý ticket P1 là bao lâu?"
-- "Khách hàng có thể yêu cầu hoàn tiền trong bao nhiêu ngày?"
-- "Ai phải phê duyệt để cấp quyền Level 3?"
+- Tài liệu nguồn: [`data/docs/`](data/docs/)
+- Bộ câu hỏi test: [`data/test_questions.json`](data/test_questions.json)
+- Tài liệu kiến trúc và tuning: [`docs/`](docs/)
+- Báo cáo cá nhân: [`reports/individual/`](reports/individual/)
+- Kết quả đánh giá: [`results/`](results/)
+- Tiêu chí chấm điểm: [`SCORING.md`](SCORING.md)
 
----
+## Tài liệu đang có
 
-## Mục tiêu học tập
+### Docs
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/tuning-log.md`](docs/tuning-log.md)
+- [`docs/rag-architecture-sprint1-2.md`](docs/rag-architecture-sprint1-2.md)
 
-| Mục tiêu | Sprint liên quan |
-|-----------|----------------|
-| Build indexing pipeline với metadata | Sprint 1 |
-| Build retrieval + grounded answer function | Sprint 2 |
-| So sánh dense / hybrid / rerank, chọn và justify variant | Sprint 3 |
-| Đánh giá pipeline bằng scorecard, A/B comparison | Sprint 4 |
+### Reports cá nhân
+- [`reports/individual/template.md`](reports/individual/template.md)
+- [`reports/individual/TruongMinhPhuoc.md`](reports/individual/TruongMinhPhuoc.md)
+- [`reports/individual/pham_quoc_vuong.md`](reports/individual/pham_quoc_vuong.md)
+- [`reports/individual/nguyen_huy_tu.md`](reports/individual/nguyen_huy_tu.md)
+- [`reports/individual/LươngHoàngAnh.md`](<reports/individual/LươngHoàngAnh.md>)
 
----
+### Results
+- [`results/scorecard_baseline.md`](results/scorecard_baseline.md)
+- [`results/scorecard_variant.md`](results/scorecard_variant.md)
+- [`results/ab_comparison.csv`](results/ab_comparison.csv)
+- [`results/ab_summary.md`](results/ab_summary.md)
+- [`results/judge_cache.json`](results/judge_cache.json)
 
-## Cấu trúc repo
+## Yêu cầu môi trường
 
-```
-lab/
-├── index.py              # Sprint 1: Preprocess → Chunk → Embed → Store
-├── rag_answer.py         # Sprint 2+3: Retrieve → (Rerank) → Generate
-├── eval.py               # Sprint 4: Scorecard + A/B Comparison
-│
-├── data/
-│   ├── docs/             # Policy documents để index
-│   │   ├── policy_refund_v4.txt
-│   │   ├── sla_p1_2026.txt
-│   │   ├── access_control_sop.txt
-│   │   ├── it_helpdesk_faq.txt
-│   │   └── hr_leave_policy.txt
-│   └── test_questions.json   # 10 test questions với expected answers
-│
-├── docs/
-│   ├── architecture.md   # Template: mô tả thiết kế pipeline
-│   └── tuning-log.md     # Template: ghi lại A/B experiments
-│
-├── reports/
-│   └── individual/
-│       └── template.md   # Template báo cáo cá nhân (500-800 từ)
-│
-├── requirements.txt
-└── .env.example
-```
+- Windows PowerShell
+- Python 3.10+ khuyến nghị
+- API key cho ít nhất một LLM provider
 
----
+Mẫu `.env` hiện tại hỗ trợ:
+- `LLM_PROVIDER=openai` hoặc `gemini`
+- `EMBEDDING_PROVIDER=openai` hoặc `local`
 
-## Setup
+Xem mẫu tại [`.env.example`](.env.example).
 
-### 1. Cài dependencies
-```bash
-pip install -r requirements.txt
-```
+## Cài đặt
 
-### 2. Tạo file .env
-```bash
-cp .env.example .env
-# Điền OPENAI_API_KEY hoặc GOOGLE_API_KEY
+### 1. Vào thư mục lab
+```powershell
+cd F:\vin\Day08-E403-36\lab
 ```
 
-### 3. Test setup
-```bash
-python index.py    # Xem preview preprocess + chunking (không cần API key)
+### 2. Tạo virtual environment
+```powershell
+python -m venv .venv
 ```
 
----
-
-## 4 Sprints
-
-### Sprint 1 (60') — Build Index
-**File:** `index.py`
-
-**Việc phải làm:**
-1. Implement `get_embedding()` — chọn OpenAI hoặc Sentence Transformers
-2. Implement phần TODO trong `build_index()` — embed và upsert vào ChromaDB
-3. Chạy `build_index()` và kiểm tra với `list_chunks()`
-
-**Definition of Done:**
-- [ ] Script chạy được, index đủ 5 tài liệu
-- [ ] Mỗi chunk có ít nhất 3 metadata fields: `source`, `section`, `effective_date`
-- [ ] `list_chunks()` cho thấy chunk hợp lý, không bị cắt giữa điều khoản
-
----
-
-### Sprint 2 (60') — Baseline Retrieval + Answer
-**File:** `rag_answer.py`
-
-**Việc phải làm:**
-1. Implement `retrieve_dense()` — query ChromaDB với embedding
-2. Implement `call_llm()` — gọi OpenAI hoặc Gemini
-3. Test `rag_answer()` với 3+ câu hỏi mẫu
-
-**Definition of Done:**
-- [ ] `rag_answer("SLA ticket P1?")` → trả về câu trả lời có citation `[1]`
-- [ ] `rag_answer("ERR-403-AUTH")` → trả về "Không đủ dữ liệu" (abstain)
-- [ ] Output có `sources` field không rỗng
-
----
-
-### Sprint 3 (60') — Tuning Tối Thiểu
-**File:** `rag_answer.py`
-
-**Chọn 1 trong 3 variants:**
-
-| Variant | Implement | Khi nào chọn |
-|---------|-----------|-------------|
-| **Hybrid** | `retrieve_sparse()` + `retrieve_hybrid()` | Corpus có cả câu tự nhiên lẫn keyword/mã lỗi |
-| **Rerank** | `rerank()` với cross-encoder | Dense search nhiều noise |
-| **Query Transform** | `transform_query()` | Query dùng alias, tên cũ |
-
-**Definition of Done:**
-- [ ] Variant chạy được end-to-end
-- [ ] Có bảng so sánh baseline vs variant (dùng `compare_retrieval_strategies()`)
-- [ ] Giải thích được vì sao chọn biến đó (ghi vào `docs/tuning-log.md`)
-
-**A/B Rule:** Chỉ đổi MỘT biến mỗi lần.
-
----
-
-### Sprint 4 (60') — Evaluation + Docs + Report
-**File:** `eval.py`
-
-**Việc phải làm:**
-1. Chấm điểm (thủ công hoặc LLM-as-Judge) cho 10 test questions
-2. Chạy `run_scorecard(BASELINE_CONFIG)` và `run_scorecard(VARIANT_CONFIG)`
-3. Chạy `compare_ab()` để thấy delta
-4. Điền vào `docs/architecture.md` và `docs/tuning-log.md`
-5. Viết báo cáo cá nhân (500-800 từ/người)
-
-**Definition of Done:**
-- [ ] Demo chạy end-to-end: `python index.py && python rag_answer.py && python eval.py`
-- [ ] Scorecard baseline và variant đã điền
-- [ ] `docs/architecture.md` và `docs/tuning-log.md` hoàn chỉnh
-- [ ] Mỗi người có file báo cáo trong `reports/individual/`
-
----
-
-## Deliverables (Nộp bài)
-
-| Item | File | Owner |
-|------|------|-------|
-| Code pipeline | `index.py`, `rag_answer.py`, `eval.py` | Tech Lead |
-| Test questions | `data/test_questions.json` (đã có mẫu) | Eval Owner |
-| Scorecard | `results/scorecard_baseline.md`, `scorecard_variant.md` | Eval Owner |
-| Architecture docs | `docs/architecture.md` | Documentation Owner |
-| Tuning log | `docs/tuning-log.md` | Documentation Owner |
-| Báo cáo cá nhân | `reports/individual/[ten].md` | Từng người |
-
----
-
-## Phân vai (Giao ngay phút đầu)
-
-| Vai trò | Trách nhiệm chính | Sprint lead |
-|---------|------------------|------------|
-| **Tech Lead** | Giữ nhịp sprint, nối code end-to-end | 1, 2 |
-| **Retrieval Owner** | Chunking, metadata, retrieval strategy, rerank | 1, 3 |
-| **Eval Owner** | Test questions, expected evidence, scorecard, A/B | 3, 4 |
-| **Documentation Owner** | architecture.md, tuning-log, báo cáo nhóm | 4 |
-
----
-
-## Gợi ý Debug (Error Tree)
-
-Nếu pipeline trả lời sai, kiểm tra lần lượt:
-
-```
-1. Indexing?
-   → list_chunks() → Chunk có đúng không? Metadata có đủ không?
-
-2. Retrieval?
-   → score_context_recall() → Expected source có được retrieve không?
-   → Thử thay dense → hybrid nếu query có keyword/alias
-
-3. Generation?
-   → score_faithfulness() → Answer có bám context không?
-   → Kiểm tra prompt: có "Answer only from context" không?
+### 3. Kích hoạt `.venv`
+```powershell
+.\.venv\Scripts\Activate.ps1
 ```
 
----
+Nếu PowerShell chặn script:
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\.venv\Scripts\Activate.ps1
+```
 
-## Tài nguyên tham khảo
+### 4. Cài thư viện
+```powershell
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
 
-- Slide Day 08: `../lecture-08.html`
-- ChromaDB docs: https://docs.trychroma.com
-- OpenAI Embeddings: https://platform.openai.com/docs/guides/embeddings
-- Sentence Transformers: https://www.sbert.net
-- rank-bm25: https://github.com/dorianbrown/rank_bm25
+### 5. Tạo file `.env`
+```powershell
+Copy-Item .env.example .env
+```
+
+Sau đó điền API key phù hợp:
+```env
+LLM_PROVIDER=openai
+OPENAI_API_KEY=...
+LLM_MODEL=gpt-4o-mini
+EMBEDDING_PROVIDER=openai
+```
+
+## Cách chạy
+
+### 1. Build index
+```powershell
+python index.py
+```
+
+Script này sẽ:
+- đọc các file trong `data/docs/`
+- preprocess và chia chunk
+- tạo embedding
+- ghi dữ liệu vào ChromaDB
+- in preview chunk và metadata coverage
+
+### 2. Chạy một query bằng CLI
+```powershell
+python rag_answer.py --query "SLA xử lý ticket P1 là bao lâu?"
+```
+
+Ví dụ với cấu hình cụ thể:
+```powershell
+python rag_answer.py --query "Ai phải phê duyệt để cấp quyền Level 3?" --mode hybrid --rerank --verbose
+```
+
+Các tùy chọn chính:
+- `--mode dense|sparse|hybrid`
+- `--rerank`
+- `--verbose`
+
+### 3. Chạy web UI
+```powershell
+python rag_answer.py --serve
+```
+
+Mặc định server chạy tại:
+```text
+http://127.0.0.1:8000
+```
+
+UI hiện tại:
+- dùng duy nhất file [`ui/index.html`](ui/index.html)
+- có trạng thái health check
+- gửi câu hỏi qua `POST /api/ask`
+- hỗ trợ chọn retrieval mode, top-k và rerank
+- hiển thị answer kèm evidence chunks
+
+### 4. Chạy evaluation
+```powershell
+python eval.py
+```
+
+Kết quả sẽ được ghi vào thư mục [`results/`](results/).
+
+## Luồng chạy đề xuất
+
+```powershell
+cd F:\vin\Day08-E403-36\lab
+.\.venv\Scripts\Activate.ps1
+python index.py
+python rag_answer.py --serve
+```
+
+Sau đó mở trình duyệt tại `http://127.0.0.1:8000`.
+
+## Chạy không cần activate `.venv`
+
+```powershell
+.\.venv\Scripts\python.exe index.py
+.\.venv\Scripts\python.exe rag_answer.py --serve
+.\.venv\Scripts\python.exe eval.py
+```
+
+## Gợi ý kiểm tra nhanh
+
+### Backend
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/api/health
+```
+
+### Query mẫu
+- `SLA xử lý ticket P1 là bao lâu?`
+- `Ai phải phê duyệt để cấp quyền Level 3?`
+- `Approval Matrix để cấp quyền hệ thống là tài liệu nào?`
+
+## Lưu ý
+
+- Cần chạy `index.py` trước khi kỳ vọng RAG trả lời đúng.
+- Nếu thiếu API key, phần generation sẽ không hoạt động đúng.
+- `favicon.ico` chưa được cấu hình, nên trình duyệt có thể log `404 /favicon.ico`; điều này không ảnh hưởng chức năng chính.
+- `eval.py` hiện lưu scorecard vào [`results/`](results/) và dùng dữ liệu từ [`data/test_questions.json`](data/test_questions.json).

@@ -1,0 +1,774 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RAG Answer UI</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #f6fbf8;
+        --surface: rgba(255, 255, 255, 0.9);
+        --surface-strong: #ffffff;
+        --line: rgba(121, 170, 149, 0.18);
+        --line-strong: rgba(104, 155, 133, 0.32);
+        --text: #1f3b32;
+        --muted: #5f7c71;
+        --accent: #8ac7b4;
+        --accent-strong: #66aa97;
+        --accent-soft: #dcefe8;
+        --shadow: 0 24px 60px rgba(117, 163, 144, 0.14);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "Be Vietnam Pro", sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at top left, rgba(171, 220, 203, 0.36), transparent 32%),
+          radial-gradient(circle at top right, rgba(230, 245, 239, 0.9), transparent 30%),
+          linear-gradient(180deg, #f8fcfa 0%, #eef7f3 100%);
+      }
+
+      .page-shell {
+        width: min(1180px, calc(100% - 32px));
+        margin: 0 auto;
+        padding: 32px 0 48px;
+      }
+
+      .card,
+      .hero-card {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        backdrop-filter: blur(14px);
+        border-radius: 28px;
+        box-shadow: var(--shadow);
+      }
+
+      .hero-card {
+        display: grid;
+        grid-template-columns: 1.5fr 0.9fr;
+        gap: 24px;
+        padding: 32px;
+        margin-bottom: 24px;
+      }
+
+      .eyebrow,
+      .section-kicker {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent-strong);
+        font-size: 0.76rem;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      .hero-copy h1,
+      .section-heading h2 {
+        margin: 14px 0 12px;
+        line-height: 1.15;
+      }
+
+      .hero-copy h1 {
+        max-width: 12ch;
+        font-size: clamp(2rem, 4vw, 3.55rem);
+      }
+
+      .hero-copy p,
+      .empty-state p,
+      .helper-text,
+      .config-summary,
+      .chunk-meta,
+      .chunk-text {
+        color: var(--muted);
+      }
+
+      .status-panel {
+        padding: 22px;
+        border-radius: 24px;
+        border: 1px solid var(--line);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(234, 246, 241, 0.82));
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: #f8fffb;
+        border: 1px solid var(--line);
+        font-weight: 500;
+      }
+
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--accent);
+        box-shadow: 0 0 0 8px rgba(138, 199, 180, 0.16);
+      }
+
+      .meta-grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 16px;
+        margin: 22px 0 0;
+      }
+
+      .meta-grid dt,
+      .meta-label {
+        margin-bottom: 8px;
+        color: var(--muted);
+        font-size: 0.82rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+      }
+
+      .meta-grid dd {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .main-grid {
+        display: grid;
+        grid-template-columns: minmax(320px, 0.9fr) minmax(320px, 1.1fr);
+        gap: 24px;
+        margin-bottom: 24px;
+      }
+
+      .card {
+        padding: 28px;
+      }
+
+      .label {
+        display: inline-block;
+        margin-bottom: 10px;
+        font-size: 0.95rem;
+        font-weight: 600;
+      }
+
+      textarea,
+      select,
+      input[type="number"] {
+        width: 100%;
+        border: 1px solid var(--line);
+        background: var(--surface-strong);
+        color: var(--text);
+        border-radius: 18px;
+        padding: 14px 16px;
+        font: inherit;
+        outline: none;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+      }
+
+      textarea {
+        resize: vertical;
+        min-height: 148px;
+      }
+
+      textarea:focus,
+      select:focus,
+      input[type="number"]:focus {
+        border-color: var(--line-strong);
+        box-shadow: 0 0 0 4px rgba(138, 199, 180, 0.14);
+      }
+
+      .controls-row {
+        display: grid;
+        grid-template-columns: minmax(180px, 1fr) 150px 150px;
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      .compact-field {
+        min-width: 0;
+      }
+
+      .checkbox-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 18px 0;
+        color: var(--muted);
+      }
+
+      .checkbox-row input {
+        width: 18px;
+        height: 18px;
+        accent-color: var(--accent-strong);
+      }
+
+      .chips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .chip {
+        border: 1px solid var(--line);
+        background: #f8fdfb;
+        color: var(--text);
+        border-radius: 999px;
+        padding: 10px 14px;
+        font: inherit;
+        cursor: pointer;
+        transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+      }
+
+      .chip:hover,
+      .chip:focus-visible {
+        transform: translateY(-1px);
+        border-color: var(--line-strong);
+        background: #f1faf6;
+      }
+
+      .actions {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        margin-top: 22px;
+        flex-wrap: wrap;
+      }
+
+      .primary-button {
+        border: none;
+        border-radius: 999px;
+        padding: 14px 22px;
+        background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+        color: white;
+        font: inherit;
+        font-weight: 600;
+        cursor: pointer;
+        transition: transform 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+        box-shadow: 0 14px 30px rgba(102, 170, 151, 0.24);
+      }
+
+      .primary-button:hover,
+      .primary-button:focus-visible {
+        transform: translateY(-1px);
+      }
+
+      .primary-button:disabled {
+        opacity: 0.7;
+        cursor: progress;
+      }
+
+      .section-heading {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+      }
+
+      .answer-badge,
+      .source-item {
+        display: inline-flex;
+        align-items: center;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent-strong);
+        font-weight: 600;
+      }
+
+      .empty-state {
+        display: grid;
+        place-items: center;
+        min-height: 220px;
+        border: 1px dashed var(--line);
+        border-radius: 24px;
+        background: rgba(255, 255, 255, 0.54);
+        text-align: center;
+      }
+
+      .empty-state.compact {
+        min-height: 160px;
+      }
+
+      .hidden {
+        display: none;
+      }
+
+      .answer-box {
+        padding: 18px 20px;
+        border-radius: 22px;
+        background: linear-gradient(180deg, #ffffff, #f4fbf8);
+        border: 1px solid var(--line);
+        line-height: 1.7;
+        white-space: pre-wrap;
+      }
+
+      .inline-meta {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        margin-top: 18px;
+      }
+
+      .source-list,
+      .config-summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .config-summary {
+        padding-top: 2px;
+      }
+
+      .chunks-list {
+        display: grid;
+        gap: 14px;
+      }
+
+      .chunk-card {
+        border: 1px solid var(--line);
+        border-radius: 22px;
+        padding: 18px;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(243, 250, 247, 0.92));
+      }
+
+      .chunk-topline,
+      .score-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .chunk-topline {
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      .chunk-source {
+        font-weight: 700;
+      }
+
+      .chunk-section {
+        color: var(--muted);
+      }
+
+      .score-pill {
+        display: inline-flex;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: white;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .chunk-meta {
+        margin: 10px 0 12px;
+        font-size: 0.93rem;
+      }
+
+      .chunk-text {
+        margin: 0;
+        line-height: 1.7;
+        white-space: pre-wrap;
+      }
+
+      .error-box {
+        padding: 16px 18px;
+        border-radius: 18px;
+        background: #fff6f6;
+        border: 1px solid rgba(217, 119, 119, 0.18);
+        color: #9a4a4a;
+      }
+
+      @media (max-width: 980px) {
+        .hero-card,
+        .main-grid,
+        .inline-meta {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-copy h1 {
+          max-width: 100%;
+        }
+      }
+
+      @media (max-width: 720px) {
+        .page-shell {
+          width: min(100% - 20px, 1180px);
+          padding-top: 20px;
+        }
+
+        .hero-card,
+        .card {
+          padding: 22px;
+          border-radius: 24px;
+        }
+
+        .controls-row {
+          grid-template-columns: 1fr;
+        }
+
+        .actions {
+          align-items: stretch;
+        }
+
+        .primary-button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero-card">
+        <div class="hero-copy">
+          <span class="eyebrow">Internal RAG Assistant</span>
+          <h1>Tra cứu tài liệu nội bộ bằng giao diện gọn, rõ và có dẫn chứng.</h1>
+          <p>
+            Nhập câu hỏi, chọn retrieval mode và xem ngay câu trả lời cùng các chunk bằng
+            chứng được dùng để sinh đáp án.
+          </p>
+        </div>
+        <div class="status-panel">
+          <div class="status-pill">
+            <span class="dot"></span>
+            <span id="server-status">Đang kiểm tra kết nối...</span>
+          </div>
+          <dl class="meta-grid">
+            <div>
+              <dt>Provider</dt>
+              <dd id="llm-provider">-</dd>
+            </div>
+            <div>
+              <dt>Model</dt>
+              <dd id="llm-model">-</dd>
+            </div>
+            <div>
+              <dt>Embedding</dt>
+              <dd id="embedding-provider">-</dd>
+            </div>
+          </dl>
+        </div>
+      </header>
+
+      <main class="main-grid">
+        <section class="card form-card">
+          <form id="ask-form">
+            <label class="label" for="query">Câu hỏi</label>
+            <textarea
+              id="query"
+              name="query"
+              rows="5"
+              placeholder="Ví dụ: SLA xử lý ticket P1 là bao lâu?"
+              required
+            ></textarea>
+
+            <div class="controls-row">
+              <div class="field">
+                <label class="label" for="retrieval-mode">Retrieval mode</label>
+                <select id="retrieval-mode" name="retrieval_mode">
+                  <option value="hybrid" selected>Hybrid</option>
+                  <option value="dense">Dense</option>
+                  <option value="sparse">Sparse</option>
+                </select>
+              </div>
+
+              <div class="field compact-field">
+                <label class="label" for="top-k-search">Top K search</label>
+                <input id="top-k-search" name="top_k_search" type="number" min="1" max="20" value="10" />
+              </div>
+
+              <div class="field compact-field">
+                <label class="label" for="top-k-select">Top K select</label>
+                <input id="top-k-select" name="top_k_select" type="number" min="1" max="10" value="3" />
+              </div>
+            </div>
+
+            <label class="checkbox-row" for="use-rerank">
+              <input id="use-rerank" name="use_rerank" type="checkbox" />
+              <span>Bật lexical rerank để ưu tiên chunk trùng ngữ nghĩa tốt hơn</span>
+            </label>
+
+            <div class="chips" id="suggestions">
+              <button type="button" class="chip">SLA xử lý ticket P1 là bao lâu?</button>
+              <button type="button" class="chip">Ai phải phê duyệt để cấp quyền Level 3?</button>
+              <button type="button" class="chip">Approval Matrix để cấp quyền hệ thống là tài liệu nào?</button>
+            </div>
+
+            <div class="actions">
+              <button type="submit" class="primary-button" id="submit-button">Hỏi RAG</button>
+              <span class="helper-text" id="submit-hint">Câu trả lời sẽ kèm citation nếu context đủ tốt.</span>
+            </div>
+          </form>
+        </section>
+
+        <section class="card answer-card">
+          <div class="section-heading">
+            <div>
+              <span class="section-kicker">Answer</span>
+              <h2>Phản hồi</h2>
+            </div>
+            <span class="answer-badge" id="answer-mode">Hybrid</span>
+          </div>
+
+          <div id="empty-state" class="empty-state">
+            <p>Chưa có truy vấn nào được gửi.</p>
+          </div>
+
+          <div id="result-state" class="result-state hidden">
+            <div class="answer-box" id="answer-text"></div>
+
+            <div class="inline-meta">
+              <div>
+                <span class="meta-label">Nguồn</span>
+                <div class="source-list" id="source-list"></div>
+              </div>
+              <div>
+                <span class="meta-label">Cấu hình</span>
+                <div class="config-summary" id="config-summary"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+
+      <section class="card evidence-card">
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">Evidence</span>
+            <h2>Chunks được dùng</h2>
+          </div>
+        </div>
+        <div id="chunks-list" class="chunks-list">
+          <div class="empty-state compact">
+            <p>Kết quả retrieve sẽ xuất hiện ở đây sau khi bạn gửi câu hỏi.</p>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script>
+      const form = document.getElementById("ask-form");
+      const queryInput = document.getElementById("query");
+      const retrievalModeInput = document.getElementById("retrieval-mode");
+      const topKSearchInput = document.getElementById("top-k-search");
+      const topKSelectInput = document.getElementById("top-k-select");
+      const rerankInput = document.getElementById("use-rerank");
+      const submitButton = document.getElementById("submit-button");
+      const submitHint = document.getElementById("submit-hint");
+
+      const serverStatus = document.getElementById("server-status");
+      const llmProvider = document.getElementById("llm-provider");
+      const llmModel = document.getElementById("llm-model");
+      const embeddingProvider = document.getElementById("embedding-provider");
+
+      const emptyState = document.getElementById("empty-state");
+      const resultState = document.getElementById("result-state");
+      const answerText = document.getElementById("answer-text");
+      const sourceList = document.getElementById("source-list");
+      const configSummary = document.getElementById("config-summary");
+      const answerMode = document.getElementById("answer-mode");
+      const chunksList = document.getElementById("chunks-list");
+
+      async function fetchHealth() {
+        try {
+          const response = await fetch("/api/health");
+          const payload = await response.json();
+
+          if (!response.ok) {
+            throw new Error(payload.error || "Không thể lấy trạng thái server.");
+          }
+
+          serverStatus.textContent = "Server sẵn sàng";
+          llmProvider.textContent = payload.llm_provider || "-";
+          llmModel.textContent = payload.llm_model || "-";
+          embeddingProvider.textContent = payload.embedding_provider || "-";
+        } catch (error) {
+          serverStatus.textContent = "Server chưa sẵn sàng";
+          llmProvider.textContent = "-";
+          llmModel.textContent = "-";
+          embeddingProvider.textContent = "-";
+        }
+      }
+
+      function setLoadingState(isLoading) {
+        submitButton.disabled = isLoading;
+        submitButton.textContent = isLoading ? "Đang truy vấn..." : "Hỏi RAG";
+        submitHint.textContent = isLoading
+          ? "Hệ thống đang retrieve context và gọi model."
+          : "Câu trả lời sẽ kèm citation nếu context đủ tốt.";
+      }
+
+      function renderSources(sources) {
+        sourceList.innerHTML = "";
+        if (!sources.length) {
+          sourceList.innerHTML = '<span class="source-item">Không có source</span>';
+          return;
+        }
+
+        sources.forEach((source) => {
+          const item = document.createElement("span");
+          item.className = "source-item";
+          item.textContent = source;
+          sourceList.appendChild(item);
+        });
+      }
+
+      function renderConfig(config) {
+        const entries = [
+          `mode: ${config.retrieval_mode || "-"}`,
+          `top_k_search: ${config.top_k_search ?? "-"}`,
+          `top_k_select: ${config.top_k_select ?? "-"}`,
+          `rerank: ${config.use_rerank ? "on" : "off"}`,
+        ];
+        configSummary.textContent = entries.join(" • ");
+        answerMode.textContent = (config.retrieval_mode || "hybrid").toUpperCase();
+      }
+
+      function escapeHtml(value) {
+        return String(value)
+          .replaceAll("&", "&amp;")
+          .replaceAll("<", "&lt;")
+          .replaceAll(">", "&gt;")
+          .replaceAll('"', "&quot;")
+          .replaceAll("'", "&#39;");
+      }
+
+      function renderChunks(chunks) {
+        chunksList.innerHTML = "";
+
+        if (!chunks.length) {
+          chunksList.innerHTML = `
+            <div class="empty-state compact">
+              <p>Không có chunk nào vượt ngưỡng liên quan cho truy vấn này.</p>
+            </div>
+          `;
+          return;
+        }
+
+        chunks.forEach((chunk, index) => {
+          const wrapper = document.createElement("article");
+          wrapper.className = "chunk-card";
+
+          const metadata = chunk.metadata || {};
+          const rerankPill = chunk.rerank_score !== null && chunk.rerank_score !== undefined
+            ? `<span class="score-pill">rerank: ${chunk.rerank_score}</span>`
+            : "";
+
+          wrapper.innerHTML = `
+            <div class="chunk-topline">
+              <div>
+                <div class="chunk-source">[${index + 1}] ${escapeHtml(metadata.source || "unknown")}</div>
+                <div class="chunk-section">${escapeHtml(metadata.section || "General")}</div>
+              </div>
+              <div class="score-row">
+                <span class="score-pill">score: ${chunk.score}</span>
+                <span class="score-pill">dense: ${chunk.dense_score}</span>
+                <span class="score-pill">sparse: ${chunk.sparse_score}</span>
+                ${rerankPill}
+              </div>
+            </div>
+            <div class="chunk-meta">
+              Department: ${escapeHtml(metadata.department || "unknown")} • Effective date: ${escapeHtml(metadata.effective_date || "unknown")} • Access: ${escapeHtml(metadata.access || "internal")}
+            </div>
+            <p class="chunk-text">${escapeHtml(chunk.text || "")}</p>
+          `;
+
+          chunksList.appendChild(wrapper);
+        });
+      }
+
+      function renderError(message) {
+        emptyState.classList.add("hidden");
+        resultState.classList.remove("hidden");
+        answerText.innerHTML = `<div class="error-box">${escapeHtml(message)}</div>`;
+        sourceList.innerHTML = "";
+        configSummary.textContent = "";
+        answerMode.textContent = "ERROR";
+        chunksList.innerHTML = `
+          <div class="empty-state compact">
+            <p>Không thể lấy evidence vì truy vấn gặp lỗi.</p>
+          </div>
+        `;
+      }
+
+      function renderResult(payload) {
+        emptyState.classList.add("hidden");
+        resultState.classList.remove("hidden");
+        answerText.textContent = payload.answer || "";
+        renderSources(payload.sources || []);
+        renderConfig(payload.config || {});
+        renderChunks(payload.chunks_used || []);
+      }
+
+      async function submitQuery(event) {
+        event.preventDefault();
+
+        const payload = {
+          query: queryInput.value.trim(),
+          retrieval_mode: retrievalModeInput.value,
+          top_k_search: Number(topKSearchInput.value),
+          top_k_select: Number(topKSelectInput.value),
+          use_rerank: rerankInput.checked,
+        };
+
+        if (!payload.query) {
+          queryInput.focus();
+          return;
+        }
+
+        setLoadingState(true);
+
+        try {
+          const response = await fetch("/api/ask", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || "Truy vấn thất bại.");
+          }
+
+          renderResult(data);
+        } catch (error) {
+          renderError(error.message);
+        } finally {
+          setLoadingState(false);
+        }
+      }
+
+      function registerSuggestions() {
+        document.querySelectorAll(".chip").forEach((button) => {
+          button.addEventListener("click", () => {
+            queryInput.value = button.textContent.trim();
+            queryInput.focus();
+          });
+        });
+      }
+
+      form.addEventListener("submit", submitQuery);
+      registerSuggestions();
+      fetchHealth();
+    </script>
+  </body>
+</html>
